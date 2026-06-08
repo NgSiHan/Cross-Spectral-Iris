@@ -52,34 +52,27 @@ class ContrastiveDataset(Dataset):
         same_class = same_class > self.positive_prob
         img_0, label_0 = self.VIS[index]
 
-        if(self.args.train==True):
-            img_address = self.VIS.imgs[index][0]
-            if(self.args.linux==True):
-                id = img_address.split('/')[-2]
-            else:
-                id1 = img_address.split('/')
-                id= id1[-1].split('\\')[-2]
-            idx_neg = self.negative_h[id]
-
-            rnd_idx = random.randint(0, len(idx_neg) - 1)
-            idx_neg = idx_neg[rnd_idx]
-            img_1, label_1 = self.NIR[idx_neg]
-
+        img_address = self.VIS.imgs[index][0]
+        if(self.args.linux==True):
+            id = img_address.split('/')[-2]
         else:
-            img_address = self.VIS.imgs[index][0]
-            if(self.args.linux==True):
-                id = img_address.split('/')[-2]
-            else:
-                id1 = img_address.split('/')
-                id= id1[-1].split('\\')[-2]
-            img_1, label_1 = self.NIR[index]
+            id1 = img_address.split('/')
+            id= id1[-1].split('\\')[-2]
+
+        # Strict instance pairing: VIS[index] and NIR[index] are sorted identically
+        # (same class folders, filenames differ only in _VIS_ vs _NIR_), so the same
+        # index gives the same simultaneously-captured instance in both modalities.
+        # Quality filtering in 02_preprocess.py already guarantees both folders hold
+        # the identical set of instances (intersection), so no index mismatch can occur.
+        img_1, label_1 = self.NIR[index]
 
         lbl_1=len(self.VIS.classes)+label_1
         return img_0, img_1,same_class,label_0,lbl_1,id
 
     def __len__(self):
-        # return min(len(self.morph), len(self.photo))
-        return len(self.NIR)
+        # VIS is the primary iterator; NIR is paired by the same index.
+        # Both counts are equal (guaranteed by 02_preprocess.py intersection).
+        return len(self.VIS)
 
 def get_padding(image):    
     w, h = image.size
