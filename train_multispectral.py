@@ -379,6 +379,7 @@ for data in datasets_to_run:
         state['optimizer_D_2'] = optimizer_D_2.state_dict()
         state['epoch'] = epoch
         # Always overwrite the latest checkpoint (for resuming)
+        os.makedirs(args.save_folder, exist_ok=True)
         latest_path = args.save_folder + args.model_name + '.pt'
         torch.save(state, latest_path)
 
