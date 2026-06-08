@@ -7,6 +7,9 @@ from utils import *
 from model import *
 from torchvision import transforms
 
+def str2bool(v):
+    return str(v).lower() in ('true', '1', 'yes')
+
 #Helper functions#################################################################################
 inv_normalize = transforms.Normalize(
     mean=[-0.5/0.5, -0.5/0.5, -0.5/0.5],
@@ -24,12 +27,12 @@ for data in datasets_to_run:
         parser.add_argument('--VIS_folder', type=str,default='./'+str(data)+'/VIS_Valid',help='path to VIS')
         parser.add_argument('--NIR_folder', type=str,default='./'+str(data)+'/NIR_Valid',help='path to NIR')
         parser.add_argument('--save_folder', type=str,default='./checkpoint/',help='path to save the data')
-        parser.add_argument('--linux',default=False,help='if linux system is running the code (True) or Windows(False)')
+        parser.add_argument('--linux',default=False, type=str2bool, help='if linux system is running the code (True) or Windows(False)')
 
         # model setup
 
         parser.add_argument('--modality',default='cropped',type=str,help='[normalized] or [cropped] iris images')
-        parser.add_argument('--train', default=False, help='Train=True,Test=False')
+        parser.add_argument('--train', default=False, type=str2bool, help='Train=True,Test=False')
         parser.add_argument('--checkpt_load',default="./checkpoint/model_resnet18_classifier_"+str(data)+".pt",help="path to checkpoint")
         parser.add_argument('--vistonir_dir',default="results/resnet18_classifier_cropped_vis_to_nir_"+str(data),help="path to output images visible to nir")
         parser.add_argument('--nirtovis_dir',default="results/resnet18_classifier_cropped_nir_to_vis_"+str(data),help="path to output images nir to visible")

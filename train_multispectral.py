@@ -1,3 +1,4 @@
+import glob
 import os
 from dataset import get_dataset
 import argparse
@@ -10,9 +11,14 @@ from model import *
 import os
 import cv2
 from torchvision import transforms
+from torchvision.models import vgg19, VGG19_Weights
 from Change_Params_Model import Change_Params
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+def str2bool(v):
+    return str(v).lower() in ('true', '1', 'yes')
+
 def save_img(img, img_path):
     cv2.imwrite(img_path, img)
 
@@ -28,11 +34,11 @@ for data in datasets_to_run:
     # General
     parser.add_argument('--batch_size', default=4, type=int, help='batch size')        
     parser.add_argument('--epochs', default=500, type=int, help='Number of epochs to run the model')
-    parser.add_argument('--train', default=True, help='Train=True,Test=False')
+    parser.add_argument('--train', default=True, type=str2bool, help='Train=True,Test=False')
     parser.add_argument('--save_folder', type=str,default='./checkpoint/',help='path to save the checkpoints')
-    parser.add_argument('--transfer',default=False,help='if you would like to transfer num_classes from previous model')
-    parser.add_argument('--linux',default=False,help='if linux system is running the code (True) or Windows(False)')
-    parser.add_argument('--verbose',default=True,help='if you would to log output images periodically during training')
+    parser.add_argument('--transfer',default=False, type=str2bool, help='if you would like to transfer num_classes from previous model')
+    parser.add_argument('--linux',default=False, type=str2bool, help='if linux system is running the code (True) or Windows(False)')
+    parser.add_argument('--verbose',default=True, type=str2bool, help='if you would to log output images periodically during training')
     # model setup
     parser.add_argument('--gan_loss', default=1e-3, type=float, help='gan loss HyperParameter')
     parser.add_argument('--l1_loss', default=1, type=float, help='l2 loss HyperParameter')
@@ -40,17 +46,18 @@ for data in datasets_to_run:
     parser.add_argument('--per_loss', default=1e-1, type=float, help='perceptual loss HyperParameter')
     parser.add_argument('--update_ratio', default=2, type=float, help='How many times should generator update before discriminator')
     parser.add_argument('--classifier_pretrain', default=0, type=float, help='How long to let the classifier pretrain before generator, 0 if none')
-    parser.add_argument('--patch_gan',default=True,help='Use patch-gan (True) or regular GAN (False)')
-    parser.add_argument('--relativistic', default=True, help='Relativistic (True) or normal discriminator (False)')
-    parser.add_argument('--use_lr_decay', default=False, help='Use lr decay (True) or not (False)')
-    parser.add_argument('--three_player', default=True, help='Three player game with classifier (True), or allow classifier to be spectator (False)')
+    parser.add_argument('--patch_gan',default=True, type=str2bool, help='Use patch-gan (True) or regular GAN (False)')
+    parser.add_argument('--relativistic', default=True, type=str2bool, help='Relativistic (True) or normal discriminator (False)')
+    parser.add_argument('--use_lr_decay', default=False, type=str2bool, help='Use lr decay (True) or not (False)')
+    parser.add_argument('--three_player', default=True, type=str2bool, help='Three player game with classifier (True), or allow classifier to be spectator (False)')
     # Dataset
     parser.add_argument('--modality',default='cropped',type=str,help='[normalized] or [cropped] iris images')
     parser.add_argument('--VIS_folder', type=str,default='./'+str(data)+'/VIS',help='path to VIS')
     parser.add_argument('--NIR_folder', type=str,default='./'+str(data)+'/NIR',help='path to NIR')
-    parser.add_argument('--continue_old', default=False, help='Continue a model (model_name must exist if True)')
+    parser.add_argument('--continue_old', default=False, type=str2bool, help='Continue a model (model_name must exist if True)')
     parser.add_argument('--model_name', type=str,default="model_resnet18_classifier_"+str(data),help='path to save the data')
     parser.add_argument('--start_epoch', default=0, type=int,help='Start Epoch for continuing')
+    parser.add_argument('--save_every', default=25, type=int, help='Save a numbered backup checkpoint every N epochs (0 = disable) [default 25]')
 
     args = parser.parse_args()
 
@@ -79,14 +86,17 @@ for data in datasets_to_run:
     net_2.train()
     # If loading from checkpoint, load dictionaries, start epoch
     if(args.continue_old==True):
-        state=torch.load(args.save_folder + args.model_name+ '.pt')
+        ckpt_path = args.save_folder + args.model_name + '.pt'
+        state=torch.load(ckpt_path)
         disc_1.load_state_dict(state["disc_1"])
         disc_2.load_state_dict(state["disc_2"])
         net_1.load_state_dict(state["net_1"])
         net_2.load_state_dict(state["net_2"])
         netR.load_state_dict(state["classifier"])
         start_epoch=state["epoch"]+1
+        print(f'Resuming from {ckpt_path}  (epoch {state["epoch"]} -> continuing at {start_epoch})')
     else:
+        state=None
         start_epoch=0
 
     #Discriminators
@@ -102,6 +112,16 @@ for data in datasets_to_run:
     optimizer_D_1 = torch.optim.Adam(list(disc_1.parameters()), lr=1e-4,betas=(0.9,0.999), weight_decay=1e-4)
     optimizer_D_2 = torch.optim.Adam(list(disc_2.parameters()), lr=1e-4,betas=(0.9,0.999), weight_decay=1e-4)
     
+    # Restore optimizer states when continuing (must be after optimizers are created)
+    if state is not None:
+        optimizer_G_1.load_state_dict(state["optimizer_1"])
+        optimizer_G_2.load_state_dict(state["optimizer_2"])
+        if "optimizer_D_1" in state:
+            optimizer_D_1.load_state_dict(state["optimizer_D_1"])
+            optimizer_D_2.load_state_dict(state["optimizer_D_2"])
+        if "optimizer_C_1" in state:
+            optimizer_C_1.load_state_dict(state["optimizer_C_1"])
+
     # Scheduler only used if args.use_lr_decay = True
     decay_rate=0.96
     G_1_scheduler=torch.optim.lr_scheduler.ExponentialLR(optimizer=optimizer_G_1,gamma=decay_rate)
@@ -118,7 +138,7 @@ for data in datasets_to_run:
     L1_Norm_loss = torch.nn.L1Loss().to(device)
     L2_Norm_loss = torch.nn.MSELoss().to(device)
     cosine_loss=nn.CosineEmbeddingLoss().to(device)
-    netF=FeatureExtractor(torchvision.models.vgg19(pretrained=True)).to(device)
+    netF=FeatureExtractor(vgg19(weights=VGG19_Weights.DEFAULT)).to(device)
     ceLoss=nn.CrossEntropyLoss().to(device)
 
     train_loader = get_dataset(args) 
@@ -327,25 +347,15 @@ for data in datasets_to_run:
                             path1="valid/normalized_resnet18_classifier_cl_"+str(data)
                         elif(args.modality=='cropped'):
                             path1="valid/cropped_resnet18_classifier_cl_"+str(data)
-                        i=0
-                        same=1
-                        while(same!=0 and i<bs):
-                            if(lbl[i]==0):
-
-                                os.makedirs(path1 , exist_ok=True)
-                                img_1=inv_normalize(img_1)
-                                img_2=inv_normalize(img_2)
-                                fake_2=inv_normalize(fake_2)
-                                fake_1=inv_normalize(fake_1)
-                                save_img(tensor2img(img_2.detach()[i].float().cpu()), path1+ '/'  + str(epoch)+'_'+str(iteration) + '_RealNIR.png')
-                                save_img(tensor2img(img_1.detach()[i].float().cpu()), path1+'/' + str(epoch)+'_'+str(iteration) + '_RealVIS.png')
-                                save_img(tensor2img(fake_2.detach()[i].float().cpu()), path1+'/' + str(epoch)+'_'+str(iteration) +'_FakeNIR.png')
-                                save_img(tensor2img(fake_1.detach()[i].float().cpu()), path1+'/' + str(epoch)+'_'+str(iteration) +'_FakeVIS.png')
-                                
-                                same=0
-                            else:
-                                i+=1
-                                same=1
+                        os.makedirs(path1, exist_ok=True)
+                        vis_show  = inv_normalize(img_1.detach())
+                        nir_show  = inv_normalize(img_2.detach())
+                        fake_nir_show = inv_normalize(fake_2.detach())
+                        fake_vis_show = inv_normalize(fake_1.detach())
+                        save_img(tensor2img(nir_show[0].float().cpu()),      path1+'/' + str(epoch)+'_'+str(iteration) + '_RealNIR.png')
+                        save_img(tensor2img(vis_show[0].float().cpu()),      path1+'/' + str(epoch)+'_'+str(iteration) + '_RealVIS.png')
+                        save_img(tensor2img(fake_nir_show[0].float().cpu()), path1+'/' + str(epoch)+'_'+str(iteration) + '_FakeNIR.png')
+                        save_img(tensor2img(fake_vis_show[0].float().cpu()), path1+'/' + str(epoch)+'_'+str(iteration) + '_FakeVIS.png')
             
             iteration+=1
         if(args.use_lr_decay==True):
@@ -360,10 +370,26 @@ for data in datasets_to_run:
         state['net_1'] = net_1.state_dict()
         state['optimizer_1'] = optimizer_G_1.state_dict()
         state['disc_1'] = disc_1.state_dict()
+        state['optimizer_D_1'] = optimizer_D_1.state_dict()
         state['classifier']=netR.state_dict()
+        state['optimizer_C_1'] = optimizer_C_1.state_dict()
         state['net_2'] = net_2.state_dict()
         state['optimizer_2'] = optimizer_G_2.state_dict()
-        state['disc_2'] = disc_2.state_dict()   
+        state['disc_2'] = disc_2.state_dict()
+        state['optimizer_D_2'] = optimizer_D_2.state_dict()
         state['epoch'] = epoch
-        torch.save(state, args.save_folder + args.model_name + '.pt')
+        # Always overwrite the latest checkpoint (for resuming)
+        latest_path = args.save_folder + args.model_name + '.pt'
+        torch.save(state, latest_path)
+
+        # Periodic numbered backup every --save_every epochs, keep last 3
+        if args.save_every > 0 and (epoch + 1) % args.save_every == 0:
+            backup_path = args.save_folder + args.model_name + f'_epoch_{epoch:04d}.pt'
+            torch.save(state, backup_path)
+            old_backups = sorted(glob.glob(
+                args.save_folder + args.model_name + '_epoch_*.pt'))
+            for old in old_backups[:-3]:
+                os.remove(old)
+            print(f'Backup checkpoint saved: {backup_path}')
+
         print('\nmodel saved!\n')
