@@ -27,10 +27,20 @@ GAN parity guarantee
 
 Usage (Linux)
 -------------
+  # ArcIris circle model only (recommended — mask model not needed):
   python scripts/02_preprocess.py \\
-      --polyu_dir  ~/iris_workspace/data/PolyU \\
-      --csv        ~/iris_workspace/data/processed/quality_report/quality_results.csv \\
-      --output_dir ~/iris_workspace/data/processed/normalized_codes
+      --polyu_dir    ~/iris_workspace/data/PolyU \\
+      --csv          ~/iris_workspace/data/processed/quality_report/quality_results.csv \\
+      --output_dir   ~/iris_workspace/data/processed/normalized_codes_arciris \\
+      --circle_model ./models-ArcIris/resnet18-1543-0.047488-maskIoU-0.934494.pth
+
+  # With optional HDBIF mask model (output discarded, no effect on polar codes):
+  python scripts/02_preprocess.py \\
+      --polyu_dir    ~/iris_workspace/data/PolyU \\
+      --csv          ~/iris_workspace/data/processed/quality_report/quality_results.csv \\
+      --output_dir   ~/iris_workspace/data/processed/normalized_codes_hdbif \\
+      --circle_model ./models/resnet18-027-0.008222-maskIoU-0.967159.pth \\
+      --mask_model   ./models/nestedsharedatrousresunet-006-0.028214-maskIoU-0.938446.pth
 """
 
 import argparse
@@ -58,10 +68,6 @@ from network import NestedSharedAtrousResUNet, conv, fclayer
 # ---------------------------------------------------------------------------
 # Default model paths
 # ---------------------------------------------------------------------------
-_DEFAULT_MASK_MODEL = (
-    _REPO_ROOT / "models" /
-    "nestedsharedatrousresunet-006-0.028214-maskIoU-0.938446.pth"
-)
 _DEFAULT_CIRCLE_MODEL = (
     _REPO_ROOT / "models" /
     "resnet18-027-0.008222-maskIoU-0.967159.pth"
@@ -80,18 +86,23 @@ class IrisSegNorm:
     POLAR_HEIGHT   = 64
     POLAR_WIDTH    = 512
 
-    def __init__(self, mask_model_path, circle_model_path, cuda=True):
+    def __init__(self, circle_model_path, mask_model_path=None, cuda=True):
         self.device = torch.device(
             "cuda" if cuda and torch.cuda.is_available() else "cpu")
         self._tfm = Compose([ToTensor(), Normalize(mean=(0.5,), std=(0.5,))])
 
         with torch.inference_mode():
-            self._mask_model = NestedSharedAtrousResUNet(
-                1, 1, width=32, resolution=(240, 320))
-            self._mask_model.load_state_dict(
-                torch.load(mask_model_path, map_location=self.device,
-                           weights_only=True))
-            self._mask_model = self._mask_model.to(self.device).eval()
+            # Mask model is optional — its output (polar mask) is discarded in
+            # cartToPol_torch; it has no effect on the polar code pixels.
+            if mask_model_path is not None:
+                self._mask_model = NestedSharedAtrousResUNet(
+                    1, 1, width=32, resolution=(240, 320))
+                self._mask_model.load_state_dict(
+                    torch.load(mask_model_path, map_location=self.device,
+                               weights_only=True))
+                self._mask_model = self._mask_model.to(self.device).eval()
+            else:
+                self._mask_model = None
 
             self._circ_model = models.resnet18()
             self._circ_model.avgpool = conv(in_channels=512, out_n=6)
@@ -121,8 +132,15 @@ class IrisSegNorm:
 
     @torch.inference_mode()
     def segment(self, im: Image.Image) -> np.ndarray:
-        """Return binary occlusion mask (uint8 0/255), same size as im."""
+        """Return binary occlusion mask (uint8 0/255), same size as im.
+
+        If no mask model was loaded, returns an all-ones (all-valid) mask.
+        The polar code pixel values are unaffected either way — only the
+        discarded polar mask differs.
+        """
         w, h = im.size
+        if self._mask_model is None:
+            return np.full((h, w), 255, dtype=np.uint8)
         arr = cv2.resize(np.array(im), self.NET_INPUT_SIZE,
                          cv2.INTER_LINEAR_EXACT)
         inp = self._tfm(arr).unsqueeze(0).to(self.device)
@@ -324,8 +342,9 @@ def parse_args():
     ap.add_argument("--output_dir", required=True,
                     help="Base output dir  (variant sub-dirs created inside)")
     ap.add_argument("--mask_model",
-                    default=str(_DEFAULT_MASK_MODEL),
-                    help="NestedSharedAtrousResUNet checkpoint")
+                    default=None,
+                    help="NestedSharedAtrousResUNet checkpoint (optional — "
+                         "polar code pixels are unaffected; omit for ArcIris preprocessing)")
     ap.add_argument("--circle_model",
                     default=str(_DEFAULT_CIRCLE_MODEL),
                     help="ResNet-18 circle-regressor checkpoint")
@@ -347,10 +366,13 @@ def main():
     polyu_dir  = Path(args.polyu_dir).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     csv_path   = Path(args.csv).expanduser().resolve()
-    mask_path  = Path(args.mask_model).expanduser().resolve()
+    mask_path  = Path(args.mask_model).expanduser().resolve() if args.mask_model else None
     circ_path  = Path(args.circle_model).expanduser().resolve()
 
-    for p in (polyu_dir, csv_path, mask_path, circ_path):
+    must_exist = [polyu_dir, csv_path, circ_path]
+    if mask_path is not None:
+        must_exist.append(mask_path)
+    for p in must_exist:
         if not p.exists():
             raise FileNotFoundError(p)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -366,7 +388,9 @@ def main():
           f"  (pairs × 2 spectra × {len(VARIANTS)} variants)")
 
     # ── Load models ───────────────────────────────────────────────────────
-    seg   = IrisSegNorm(str(mask_path), str(circ_path), cuda=not args.no_cuda)
+    seg   = IrisSegNorm(str(circ_path),
+                        mask_model_path=str(mask_path) if mask_path else None,
+                        cuda=not args.no_cuda)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     print(f"Device : {seg.device}\n")
 
