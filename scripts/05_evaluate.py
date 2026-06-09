@@ -301,16 +301,18 @@ def compute_metrics(scores_flat: np.ndarray, genuine_flat: np.ndarray,
     genuine_scores  = scores_flat[genuine_flat]
     impostor_scores = scores_flat[~genuine_flat]
 
-    # Filter out failed HDBIF comparisons (score == -999)
-    genuine_scores  = genuine_scores[genuine_scores > -1]
-    impostor_scores = impostor_scores[impostor_scores > -1]
+    # Filter out failed HDBIF comparisons (sentinel score == -999.0).
+    # Threshold at -900 so legitimate ArcIris cosine scores in [-1, 1]
+    # (including values near -1) are NOT dropped — only the failure sentinel.
+    genuine_scores  = genuine_scores[genuine_scores > -900]
+    impostor_scores = impostor_scores[impostor_scores > -900]
 
     if len(genuine_scores) == 0 or len(impostor_scores) == 0:
         print(f'WARNING: no valid scores for "{label}" — skipping')
         return None, None, None
 
     # Rebuild flat arrays after filtering
-    valid_mask = scores_flat > -1
+    valid_mask = scores_flat > -900
     s_flat = scores_flat[valid_mask]
     g_flat = genuine_flat[valid_mask]
 

@@ -51,7 +51,7 @@ for data in datasets_to_run:
     parser.add_argument('--use_lr_decay', default=False, type=str2bool, help='Use lr decay (True) or not (False)')
     parser.add_argument('--three_player', default=True, type=str2bool, help='Three player game with classifier (True), or allow classifier to be spectator (False)')
     # Dataset
-    parser.add_argument('--modality',default='cropped',type=str,help='[normalized] or [cropped] iris images')
+    parser.add_argument('--modality',default='normalized',type=str,help='[normalized] or [cropped] iris images')
     parser.add_argument('--VIS_folder', type=str,default='./'+str(data)+'/VIS',help='path to VIS')
     parser.add_argument('--NIR_folder', type=str,default='./'+str(data)+'/NIR',help='path to NIR')
     parser.add_argument('--continue_old', default=False, type=str2bool, help='Continue a model (model_name must exist if True)')

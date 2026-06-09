@@ -43,11 +43,18 @@ inv_normalize = transforms.Normalize(
 )
 
 
-def tensor_to_bgr_u8(t: torch.Tensor) -> np.ndarray:
-    """(3, H, W) float tensor in [0,1] → (H, W, 3) uint8 BGR for cv2.imwrite."""
-    arr = t.clamp(0, 1).permute(1, 2, 0).numpy()   # HWC, RGB order
-    arr = (arr * 255.0).round().astype(np.uint8)
-    return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+def tensor_to_grey_u8(t: torch.Tensor) -> np.ndarray:
+    """(3, H, W) float tensor in [0,1] → (H, W) uint8 single-channel grey.
+
+    The UNet emits 3 independently-generated channels that L1 only pulls
+    toward the same grey NIR target, so they are near- but not exactly equal.
+    We average them into one greyscale channel and save a single-channel PNG —
+    format-identical to the real-NIR gallery saved by 02_preprocess.py
+    (Image.fromarray(polar) → 1-channel).  This guarantees the matcher reads
+    a true greyscale for BOTH gallery and probe (no channel-0 asymmetry).
+    """
+    grey = t.clamp(0, 1).mean(dim=0).numpy()        # (H, W) average channels
+    return (grey * 255.0).round().astype(np.uint8)
 
 
 def main():
@@ -100,11 +107,11 @@ def main():
                 out_fname   = fname.replace('_VIS_', '_fakeNIR_')
 
                 out_img = inv_normalize(fake_nir[i].cpu())
-                bgr     = tensor_to_bgr_u8(out_img)
+                grey    = tensor_to_grey_u8(out_img)
 
                 out_cls = out_root / class_name
                 out_cls.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(str(out_cls / out_fname), bgr)
+                cv2.imwrite(str(out_cls / out_fname), grey)
 
                 img_idx += 1
                 n_saved += 1

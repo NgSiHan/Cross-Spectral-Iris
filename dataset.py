@@ -18,34 +18,17 @@ class ContrastiveDataset(Dataset):
         self.args=args
         self.positive_prob = positive_prob
 
-        print(len(self.VIS))  
-        print(len(self.NIR))
-
-        self.positive_h = {}
-        self.negative_h = {}
-
-        for i in range(len(self.VIS)):
-            # contruct the positive pair correspondence
-            img_address = self.VIS.imgs[i][0]
-            if(self.args.linux==True):
-                id = img_address.split('/')[-2]
-            else:
-                id1 = img_address.split('/')
-                id= id1[-1].split('\\')[-2]
-            print(id)
-            if id in self.positive_h:
-                self.positive_h[id].append(i)
-            else:
-                self.positive_h[id] = [i]
-            # construct the negative pair correspondence
-            for j in range(len(self.VIS.imgs)):
-                profile_address = self.VIS.imgs[j][0]
-               
-                if id in profile_address:
-                    if id in self.negative_h:
-                        self.negative_h[id].append(j)
-                    else:
-                        self.negative_h[id] = [j]
+        # VIS[index] is paired with NIR[index] (see __getitem__).  This only
+        # works if both ImageFolders enumerate the same number of samples in a
+        # consistent order; 02_preprocess.py guarantees the intersection, but
+        # fail loudly here rather than silently mis-pairing identities.
+        if len(self.VIS) != len(self.NIR):
+            raise ValueError(
+                f"VIS/NIR sample count mismatch: {len(self.VIS)} vs "
+                f"{len(self.NIR)} — index pairing in __getitem__ would be "
+                "wrong.  Re-run 02_preprocess.py (it saves only instances "
+                "valid in BOTH spectra).")
+        print(f"ContrastiveDataset: {len(self.VIS)} paired VIS/NIR samples")
 
     def __getitem__(self, index):
         same_class = random.uniform(0, 1)
@@ -180,7 +163,7 @@ def create_dataloader(args):
             256))
     rotate = transforms.RandomRotation(degrees=(-15,15))
     normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
-                                 std=[0.5, 0.5, 0.5]),
+                                 std=[0.5, 0.5, 0.5])
 
     # initialize our training and validation set data augmentation
     # pipeline
