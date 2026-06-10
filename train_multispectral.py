@@ -13,6 +13,7 @@ import cv2
 from torchvision import transforms
 from torchvision.models import vgg19, VGG19_Weights
 from Change_Params_Model import Change_Params
+from src.matchers.arciris_network import iresnet100 as ArcIResNet100
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -58,6 +59,11 @@ for data in datasets_to_run:
     parser.add_argument('--model_name', type=str,default="model_resnet18_classifier_"+str(data),help='path to save the data')
     parser.add_argument('--start_epoch', default=0, type=int,help='Start Epoch for continuing')
     parser.add_argument('--save_every', default=25, type=int, help='Save a numbered backup checkpoint every N epochs (0 = disable) [default 25]')
+    # ArcIris identity loss — directly optimises the generator for the evaluation metric
+    parser.add_argument('--arciris_model', type=str, default='./models-ArcIris/ResNet100_154000.pt',
+                        help='Frozen ArcIris iresnet100 checkpoint used for identity loss [default: ./models-ArcIris/ResNet100_154000.pt]')
+    parser.add_argument('--arciris_loss', default=1.0, type=float,
+                        help='ArcIris identity loss weight applied to G_VIS→NIR (0 = disabled) [default 1.0]')
 
     args = parser.parse_args()
 
@@ -105,6 +111,29 @@ for data in datasets_to_run:
 
     disc_2.to(device)
     disc_2.train()
+
+    # ArcIris frozen identity-loss model (G_VIS→NIR only)
+    # Directly optimises fake-NIR to match real-NIR in ArcIris embedding space —
+    # the exact metric used in 05_evaluate.py. Weights are frozen; only the
+    # generator's weights are updated through this loss.
+    if args.arciris_loss > 0:
+        _arc_path = args.arciris_model
+        if not os.path.exists(_arc_path):
+            raise FileNotFoundError(
+                f'ArcIris model not found: {_arc_path}\n'
+                'Pass --arciris_loss 0 to disable the identity loss.')
+        netArc = ArcIResNet100(pretrained=False)
+        _arc_sd = torch.load(_arc_path, map_location=device)
+        _arc_sd = {k.replace('module.', ''): v for k, v in _arc_sd.items()}
+        netArc.load_state_dict(_arc_sd, strict=True)
+        netArc = netArc.to(device).eval()
+        for p in netArc.parameters():
+            p.requires_grad = False
+        print(f'ArcIris identity loss ENABLED  weight={args.arciris_loss}  '
+              f'model={_arc_path}')
+    else:
+        netArc = None
+        print('ArcIris identity loss DISABLED  (--arciris_loss 0)')
 
     # Set optimizers
     optimizer_G_1 = torch.optim.Adam(list(net_1.parameters()), lr=1e-4,betas=(0.9,0.999), weight_decay=1e-4)
@@ -161,6 +190,7 @@ for data in datasets_to_run:
         loss_m_class = AverageMeter()
         loss_m_a_1 = AverageMeter()
         loss_m_a_2 = AverageMeter()
+        loss_m_arc_2 = AverageMeter()
         iteration=0
 
         for iter, (img_1, img_2, lbl,cls1,cls2,id) in enumerate(train_loader):
@@ -232,10 +262,19 @@ for data in datasets_to_run:
                 loss_GAN_Fake_2 = adversarial_loss(pred_fake_2 - torch.mean(pred_real_2), valid)
             else:
                 loss_GAN_Fake_2 = adversarial_loss(pred_fake_2, valid)
-            # L1 loss 
+            # L1 loss
             loss_L1_Fake_2 = (L1_Norm_loss(fake_2, img_2))
             # Update loss
             loss_Fake_2 +=  loss_GAN_Fake_2 * args.gan_loss + loss_L1_Fake_2 * args.l1_loss
+            # ArcIris identity loss: push fake NIR to match real NIR in ArcIris embedding space.
+            # Gradients flow through fake_2 → net_1; netArc is frozen (no param update).
+            if netArc is not None and args.arciris_loss > 0:
+                with torch.no_grad():
+                    arc_real = F.normalize(netArc(img_2), dim=1)          # target, detached
+                arc_fake = F.normalize(netArc(fake_2), dim=1)             # gradient path
+                loss_arc_2 = (1.0 - (arc_fake * arc_real).sum(dim=1)).mean()
+                loss_Fake_2 += loss_arc_2 * args.arciris_loss
+                loss_m_arc_2.update(loss_arc_2.item())
 
             # If classifier is finished pretraining, update Generator as well
             if(epoch>=args.classifier_pretrain):
@@ -339,8 +378,8 @@ for data in datasets_to_run:
             lr=G_1_scheduler.get_last_lr()[0]
             if(args.verbose):
                 if iteration % 200 == 0:
-                    print('epoch: %02d, iter: %02d/%02d, lr: %.4f, D1 loss: %.4f, G1 loss: %.4f, A1 loss: %.4f, R1 loss: %.4f, P1 loss: %.4f, D2 loss: %.4f, G2 loss: %.4f, A2 loss: %.4f, R2 loss: %.4f, P2 loss: %.4f, class loss: %.4f' % (
-                        epoch, iteration, len(train_loader), lr,loss_m_d_1.avg, loss_m_g_1.avg, loss_m_a_1.avg, loss_m_r_1.avg,loss_m_p_1.avg, loss_m_d_2.avg, loss_m_g_2.avg,loss_m_a_2.avg, loss_m_r_2.avg,loss_m_p_2.avg,loss_m_class.avg ))
+                    print('epoch: %02d, iter: %02d/%02d, lr: %.4f, D1 loss: %.4f, G1 loss: %.4f, A1 loss: %.4f, R1 loss: %.4f, P1 loss: %.4f, Arc2 loss: %.4f, D2 loss: %.4f, G2 loss: %.4f, A2 loss: %.4f, R2 loss: %.4f, P2 loss: %.4f, class loss: %.4f' % (
+                        epoch, iteration, len(train_loader), lr,loss_m_d_1.avg, loss_m_g_1.avg, loss_m_a_1.avg, loss_m_r_1.avg,loss_m_p_1.avg, loss_m_arc_2.avg, loss_m_d_2.avg, loss_m_g_2.avg,loss_m_a_2.avg, loss_m_r_2.avg,loss_m_p_2.avg,loss_m_class.avg ))
                     if(epoch>=args.classifier_pretrain):
                         
                         if(args.modality=='normalized'):

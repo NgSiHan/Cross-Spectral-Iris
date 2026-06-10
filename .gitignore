@@ -1,1 +1,3 @@
-src/__pycache__"models-ArcIris/ResNet100_154000.pt" 
+models-ArcIris/ResNet100_154000.pt
+*/__pycache__
+__pycache__

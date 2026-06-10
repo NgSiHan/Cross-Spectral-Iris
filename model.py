@@ -237,11 +237,11 @@ class UNet(nn.Module):
 
         bottleneck = e6.view(bs, -1)
         bottleneck = self.fc1(bottleneck)
-        d1 = F.dropout(self.deconv1_bn(self.deconv1(F.relu(e6))), 0.5, training=True)
+        d1 = F.dropout(self.deconv1_bn(self.deconv1(F.relu(e6))), 0.5, training=self.training)
         d1 = torch.cat([d1, e5], 1)
-        d2 = F.dropout(self.deconv2_bn(self.deconv2(F.relu(d1))), 0.5, training=True)
+        d2 = F.dropout(self.deconv2_bn(self.deconv2(F.relu(d1))), 0.5, training=self.training)
         d2 = torch.cat([d2, e4], 1)
-        d3 = F.dropout(self.deconv3_bn(self.deconv3(F.relu(d2))), 0.5, training=True)
+        d3 = F.dropout(self.deconv3_bn(self.deconv3(F.relu(d2))), 0.5, training=self.training)
         d3 = torch.cat([d3, e3], 1)
         d4 = self.deconv4_bn(self.deconv4(F.relu(d3)))
 
