@@ -271,7 +271,15 @@ for data in datasets_to_run:
             if netArc is not None and args.arciris_loss > 0:
                 with torch.no_grad():
                     arc_real = F.normalize(netArc(img_2), dim=1)          # target, detached
-                arc_fake = F.normalize(netArc(fake_2), dim=1)             # gradient path
+                # Match evaluation pipeline exactly:
+                # 04_generate_fake_nir.py averages the 3 UNet output channels to a
+                # single-channel greyscale before saving; 05_evaluate.py then repeats
+                # that channel to 3 identical channels before calling ArcIris.
+                # If we skip this averaging here, ArcIris sees 3 independent channels
+                # during training but 3 identical channels at evaluation — a mismatch
+                # that causes the training Arc2 loss to underestimate evaluation difficulty.
+                fake_2_grey = fake_2.mean(dim=1, keepdim=True).expand(-1, 3, -1, -1)
+                arc_fake = F.normalize(netArc(fake_2_grey), dim=1)        # gradient: fake_2_grey → fake_2
                 loss_arc_2 = (1.0 - (arc_fake * arc_real).sum(dim=1)).mean()
                 loss_Fake_2 += loss_arc_2 * args.arciris_loss
                 loss_m_arc_2.update(loss_arc_2.item())
